@@ -1,0 +1,127 @@
+# Status Puck — ESPHome Configuration
+# Olimex ESP32-DevKit-Lipo Rev D + Adafruit NeoPixel Ring 12
+# Wall-mounted LED indicator outside office door
+
+esphome:
+  name: status-puck
+  friendly_name: "Status Puck"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "StatusPuck-Fallback"
+    password: "fallback123"
+
+captive_portal:
+
+# NeoPixel Ring — 12 WS2812B LEDs on GPIO16
+light:
+  - platform: neopixelbus
+    type: GRB
+    variant: WS2812X
+    pin: GPIO25
+    num_leds: 12
+    name: "Status Puck Light"
+    id: puck_light
+    default_transition_length: 500ms
+    effects:
+      - pulse:
+          name: "Slow Pulse"
+          transition_length: 2s
+          update_interval: 2s
+      - pulse:
+          name: "Fast Pulse"
+          transition_length: 500ms
+          update_interval: 500ms
+      - strobe:
+          name: "Flash"
+          colors:
+            - state: true
+              brightness: 100%
+              duration: 200ms
+            - state: false
+              duration: 200ms
+            - state: true
+              brightness: 100%
+              duration: 200ms
+            - state: false
+              duration: 1s
+
+# Pull office status from HA
+text_sensor:
+  - platform: homeassistant
+    name: "Office Status"
+    id: office_status
+    entity_id: sensor.status_dice_office_status
+    on_value:
+      then:
+        - script.execute: update_puck_colour
+
+# Brightness control — slider in HA (0-100%)
+number:
+  - platform: template
+    name: "Puck Brightness"
+    id: puck_brightness
+    icon: "mdi:brightness-6"
+    unit_of_measurement: "%"
+    min_value: 5
+    max_value: 100
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    on_value:
+      then:
+        - script.execute: update_puck_colour
+
+script:
+  - id: update_puck_colour
+    then:
+      - lambda: |-
+          auto status = id(office_status).state;
+          float bright = id(puck_brightness).state / 100.0;
+
+          if (status == "not_working") {
+            auto call = id(puck_light).turn_off();
+            call.perform();
+            return;
+          }
+
+          auto call = id(puck_light).turn_on();
+          call.set_brightness(bright);
+          call.set_effect("none");
+
+          if (status == "available") {
+            call.set_rgb(0.0, 1.0, 0.0);
+          } else if (status == "meeting") {
+            call.set_rgb(1.0, 0.0, 0.0);
+          } else if (status == "focusing") {
+            call.set_rgb(1.0, 1.0, 0.0);
+          } else if (status == "on_break") {
+            call.set_rgb(0.0, 0.5, 1.0);
+          } else if (status == "afk") {
+            call.set_rgb(0.6, 0.0, 1.0);
+          } else {
+            // Unknown - Do nothing!
+            return;
+          }
+
+          call.perform();
